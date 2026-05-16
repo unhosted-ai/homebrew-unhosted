@@ -29,6 +29,12 @@ class LlamaCppRpc < Formula
   depends_on "cmake" => :build
   depends_on "curl"
 
+  # Keep the keg unlinked at the standard names because they conflict
+  # with the upstream `llama.cpp` formula. Users typically have both
+  # installed (upstream for general use, this for VRAM-pooling), so we
+  # surface our binaries via distinct names — see `install` below.
+  keg_only :versioned_formula
+
   def install
     args = std_cmake_args + %W[
       -DBUILD_SHARED_LIBS=ON
@@ -47,15 +53,14 @@ class LlamaCppRpc < Formula
     system "cmake", "--build", "build", "--config", "Release"
     system "cmake", "--install", "build", "--config", "Release", "--prefix", prefix
 
-    # Coexist with the upstream `llama.cpp` formula by giving our
-    # binaries distinct names. A user who has both installed gets
-    # `llama-server` (the stock build, no --rpc) and `llama-server-rpc`
-    # (this build, with --rpc) and chooses by command. unhosted picks
-    # up the RPC-enabled build either way because its probe checks
-    # for `--rpc` in the help text, not by binary name.
-    bin.install_symlink bin/"llama-server" => "llama-server-rpc"
+    # Coexist with the upstream `llama.cpp` formula. The standard
+    # binary names (`llama-server`, `rpc-server`) stay inside the keg
+    # via `keg_only`; here we expose distinctly-named symlinks on
+    # PATH so users with BOTH formulas installed don't get PATH-order
+    # surprises. unhosted's `vram_pool::probe` looks for both names.
+    HOMEBREW_PREFIX.install_symlink bin/"llama-server" => "bin/llama-server-rpc"
     if (bin/"rpc-server").exist?
-      bin.install_symlink bin/"rpc-server" => "rpc-server-llama"
+      HOMEBREW_PREFIX.install_symlink bin/"rpc-server" => "bin/rpc-server"
     end
   end
 
