@@ -46,7 +46,18 @@ class LlamaCppRpc < Formula
       -DLLAMA_ALL_WARNINGS=OFF
       -DLLAMA_BUILD_TESTS=OFF
       -DGGML_RPC=ON
+      -DGGML_BLAS=OFF
     ]
+    # GGML_BLAS=OFF works around an upstream bug in llama.cpp b9090:
+    # when `rpc-server` receives a graph compute request that
+    # includes RMS_NORM and BLAS is the assigned backend for it,
+    # rpc-server aborts with "ggml_backend_blas_graph_compute:
+    # unsupported op RMS_NORM" and llama-server reports "Remote RPC
+    # server crashed or returned malformed response" within 2-3 s of
+    # the first inference. Disabling BLAS routes the op through CPU
+    # / Metal instead and the pool stays up. Tracking upstream for a
+    # fix; will re-enable BLAS once the op coverage in the BLAS
+    # backend catches up.
     # Apple Silicon: assert Metal explicitly. Upstream defaults to ON
     # on macOS, but pinning it here protects against a future config
     # change silently producing a CPU-only build that would be slow
