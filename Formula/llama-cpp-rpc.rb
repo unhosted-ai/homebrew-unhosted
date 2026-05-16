@@ -29,12 +29,6 @@ class LlamaCppRpc < Formula
   depends_on "cmake" => :build
   depends_on "curl"
 
-  # Keep the keg unlinked at the standard names because they conflict
-  # with the upstream `llama.cpp` formula. Users typically have both
-  # installed (upstream for general use, this for VRAM-pooling), so we
-  # surface our binaries via distinct names — see `install` below.
-  keg_only :versioned_formula
-
   def install
     args = std_cmake_args + %W[
       -DBUILD_SHARED_LIBS=ON
@@ -53,22 +47,36 @@ class LlamaCppRpc < Formula
     system "cmake", "--build", "build", "--config", "Release"
     system "cmake", "--install", "build", "--config", "Release", "--prefix", prefix
 
-    # Coexist with the upstream `llama.cpp` formula. The standard
-    # binary names (`llama-server`, `rpc-server`) stay inside the keg
-    # via `keg_only`; here we expose distinctly-named symlinks on
-    # PATH so users with BOTH formulas installed don't get PATH-order
-    # surprises. unhosted's `vram_pool::probe` looks for both names.
-    HOMEBREW_PREFIX.install_symlink bin/"llama-server" => "bin/llama-server-rpc"
-    if (bin/"rpc-server").exist?
-      HOMEBREW_PREFIX.install_symlink bin/"rpc-server" => "bin/rpc-server"
+    # Coexist with the upstream `llama.cpp` formula by trimming the
+    # keg down to just the two binaries unhosted needs, renaming the
+    # one that conflicts. After this:
+    #   - `llama-server-rpc` (renamed) — our RPC-enabled llama-server
+    #   - `rpc-server`                  — upstream doesn't ship this name
+    # Both link cleanly into HOMEBREW_PREFIX/bin without `keg_only`,
+    # and a user with upstream `llama.cpp` installed keeps their
+    # standard `llama-server` etc. untouched on PATH.
+    Dir.glob(bin/"*").each do |file|
+      base = File.basename(file)
+      case base
+      when "llama-server"
+        File.rename(file, bin/"llama-server-rpc")
+      when "rpc-server"
+        # keep as-is — no upstream collision
+      else
+        # Every other llama-* / convert_* utility would shadow the
+        # upstream formula's binary. We don't need them for VRAM-
+        # pooling; users wanting llama-cli etc. should keep using
+        # the standard `brew install llama.cpp`.
+        File.delete(file) if File.file?(file)
+      end
     end
   end
 
   test do
     # The whole point of this formula: --rpc must be present.
-    output = shell_output("#{bin}/llama-server --help 2>&1")
+    output = shell_output("#{bin}/llama-server-rpc --help 2>&1")
     assert_match "--rpc", output,
-      "llama-server build is missing --rpc — -DGGML_RPC=ON did not take effect"
+      "llama-server-rpc build is missing --rpc — -DGGML_RPC=ON did not take effect"
 
     # rpc-server is what makes a peer a layer host. Bail if missing.
     assert_predicate bin/"rpc-server", :exist?,
