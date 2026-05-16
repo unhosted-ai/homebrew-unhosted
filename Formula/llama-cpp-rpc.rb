@@ -29,6 +29,16 @@ class LlamaCppRpc < Formula
   depends_on "cmake" => :build
   depends_on "curl"
 
+  # Live entirely inside the keg. The lib/* and include/* files
+  # collide with the upstream `ggml` and `llama.cpp` formulas
+  # (which is how llama-server links). The binaries link to libs
+  # via rpath, so as long as the keg's own lib/ is reachable they
+  # work fine from the opt-prefix path. unhosted's `vram_pool::probe`
+  # knows to look at `#{HOMEBREW_PREFIX}/opt/llama-cpp-rpc/bin/`
+  # directly, so the user doesn't have to touch PATH for VRAM-pooling
+  # to work.
+  keg_only :versioned_formula
+
   def install
     args = std_cmake_args + %W[
       -DBUILD_SHARED_LIBS=ON
@@ -47,36 +57,40 @@ class LlamaCppRpc < Formula
     system "cmake", "--build", "build", "--config", "Release"
     system "cmake", "--install", "build", "--config", "Release", "--prefix", prefix
 
-    # Coexist with the upstream `llama.cpp` formula by trimming the
-    # keg down to just the two binaries unhosted needs, renaming the
-    # one that conflicts. After this:
-    #   - `llama-server-rpc` (renamed) — our RPC-enabled llama-server
-    #   - `rpc-server`                  — upstream doesn't ship this name
-    # Both link cleanly into HOMEBREW_PREFIX/bin without `keg_only`,
-    # and a user with upstream `llama.cpp` installed keeps their
-    # standard `llama-server` etc. untouched on PATH.
+    # Trim the keg down to just the two binaries unhosted needs.
+    # Cuts install size and reduces surface that could conflict if a
+    # future maintainer drops `keg_only`. The bins still link via
+    # rpath to lib/ which we keep intact.
     Dir.glob(bin/"*").each do |file|
       base = File.basename(file)
-      case base
-      when "llama-server"
-        File.rename(file, bin/"llama-server-rpc")
-      when "rpc-server"
-        # keep as-is — no upstream collision
-      else
-        # Every other llama-* / convert_* utility would shadow the
-        # upstream formula's binary. We don't need them for VRAM-
-        # pooling; users wanting llama-cli etc. should keep using
-        # the standard `brew install llama.cpp`.
-        File.delete(file) if File.file?(file)
-      end
+      next if %w[llama-server rpc-server].include?(base)
+      File.delete(file) if File.file?(file)
     end
+  end
+
+  def caveats
+    <<~EOS
+      llama-cpp-rpc is keg-only because its lib/ and include/ files
+      collide with the upstream `ggml` and `llama.cpp` formulas. The
+      binaries are at:
+
+        #{opt_bin}/llama-server   (RPC-enabled — has --rpc flag)
+        #{opt_bin}/rpc-server     (layer-host daemon)
+
+      The unhosted daemon looks for them at exactly that path, so
+      `unhosted vram-pool detect` should report `ready for pool: YES`
+      after this install with no PATH changes needed.
+
+      To call them directly from your shell, use the absolute paths
+      above, or add #{opt_bin} to your PATH.
+    EOS
   end
 
   test do
     # The whole point of this formula: --rpc must be present.
-    output = shell_output("#{bin}/llama-server-rpc --help 2>&1")
+    output = shell_output("#{bin}/llama-server --help 2>&1")
     assert_match "--rpc", output,
-      "llama-server-rpc build is missing --rpc — -DGGML_RPC=ON did not take effect"
+      "llama-server build is missing --rpc — -DGGML_RPC=ON did not take effect"
 
     # rpc-server is what makes a peer a layer host. Bail if missing.
     assert_predicate bin/"rpc-server", :exist?,
